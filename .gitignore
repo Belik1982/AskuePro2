@@ -1,0 +1,12 @@
+# Игнорировать папку с секретами Streamlit
+.streamlit/secrets.toml
+.streamlit/
+
+# Игнорировать виртуальное окружение (если есть)
+venv/
+.env
+env/
+
+# Игнорировать кэш питона
+__pycache__/
+*.pyc
