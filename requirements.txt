@@ -6,3 +6,4 @@ openpyxl
 fpdf2>=2.7.4
 matplotlib
 scipy
+google-generativeai
