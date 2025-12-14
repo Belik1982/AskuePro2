@@ -94,7 +94,7 @@ def plot_30min_graph(df, height, line_width, show_pts, show_anomalies, chart_typ
 
     axis = get_axis_style(bw_mode)
     
-    # --- ОБНОВЛЕННАЯ НАСТРОЙКА ОСИ X (СЕТКА + ПЛОТНОСТЬ) ---
+    # Настройки оси X (сетка + плотность)
     x_ax = axis.copy()
     x_ax.update(dict(
         title=labels.get("x", ""),
@@ -103,10 +103,9 @@ def plot_30min_graph(df, height, line_width, show_pts, show_anomalies, chart_typ
             dict(dtickrange=[86400000, None], value="%d.%m")
         ],
         rangeslider=dict(visible=True, thickness=0.08),
-        # Новые настройки для плотности и сетки
         showgrid=True,
         gridcolor="rgba(128,128,128,0.2)",
-        nticks=30, # Принудительно увеличиваем кол-во меток (~в 3 раза больше стандарта)
+        nticks=30, 
     ))
 
     fig.update_layout(
@@ -144,7 +143,6 @@ def plot_daily_bar(df, height, l_pos, labels, template, palette_name="Default", 
             texttemplate=text_template, textposition=text_pos
         ))
 
-    # Ось X для суточного (уже исправленная)
     axis_x = get_axis_style(bw_mode).copy()
     axis_x.update(dict(
         title=labels.get("x", ""), 
@@ -169,13 +167,26 @@ def plot_heatmap(df, height, show_text, labels, template, palette_name="Default"
     if df.empty: return go.Figure()
     m, t = df.iloc[0]["MeterID"], df.iloc[0]["Type"]
     sub = df[(df["MeterID"] == m) & (df["Type"] == t)].copy()
+    
     sub["TimeStr"] = sub["Time"].apply(lambda x: x.strftime("%H:%M"))
-    sub["DateStr"] = sub["Date"].apply(lambda x: x.strftime("%d.%m"))
-    piv = sub.pivot_table(index="TimeStr", columns="DateStr", values="Value", aggfunc="sum")
+    
+    # 1. Сначала пивот по реальной дате (чтобы сортировка была правильной)
+    # Используем Date (datetime.date) как есть
+    piv = sub.pivot_table(index="TimeStr", columns="Date", values="Value", aggfunc="sum")
+    
+    # 2. Сортуємо строки (Час)
     piv.index = pd.to_datetime(piv.index, format="%H:%M").time
-    piv = piv.sort_index(); piv.index = [tm.strftime("%H:%M") for tm in piv.index]
+    piv = piv.sort_index()
+    piv.index = [tm.strftime("%H:%M") for tm in piv.index]
+    
+    # 3. Перейменовуємо стовпчики (Дати) ВЖЕ ПІСЛЯ того як вони відсортувалися автоматично
+    # Це вирішує проблему 1.11 -> 1.12
+    new_cols = [d.strftime("%d.%m") for d in piv.columns]
+    piv.columns = new_cols
+    
     scale = PALETTE_TO_HEATMAP.get(palette_name, "RdYlGn_r")
     txt = ".1f" if show_text else False
+    
     fig = px.imshow(piv, aspect="auto", color_continuous_scale=scale, text_auto=txt)
     fig.update_layout(height=height, title=f"{m} {t}", template=template, margin=dict(t=40, b=20, l=40, r=40))
     return fig
@@ -185,9 +196,12 @@ def plot_pq_scatter(df, height, show_cos, l_pos, bw_mode, labels, template, pale
     if df_c.empty: return go.Figure()
     piv = df_c.pivot_table(index=["DateTime", "MeterID"], columns="Suffix", values="Value").reset_index()
     if 2 not in piv.columns or 4 not in piv.columns: return go.Figure()
+    
     piv["TimeStr"] = piv["DateTime"].dt.strftime("%d.%m %H:%M")
+    
     fig = go.Figure()
     meters = sorted(piv["MeterID"].unique())
+    
     for i, m in enumerate(meters):
         d = piv[piv["MeterID"] == m]
         if bw_mode: c = "black"; sym = get_style_settings(i, True, palette_name)[2]
