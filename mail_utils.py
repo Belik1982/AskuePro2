@@ -34,7 +34,7 @@ def decode_mime_words(s):
 def fetch_attachments_from_mail(limit=15):
     """
     Подключается к почте и ищет вложения .txt.
-    Фильтр: Отправитель + Тема "30917".
+    Фильтр: Игнорируем отправителя, ищем "30917" в любой части темы.
     """
     try:
         cfg = st.secrets["email"]
@@ -42,7 +42,7 @@ def fetch_attachments_from_mail(limit=15):
         EMAIL_USER = cfg["email_user"]
         EMAIL_PASS = cfg["email_password"]
         EMAIL_PORT = int(cfg.get("email_port", 993))
-        ALLOWED_SENDER = cfg.get("allowed_sender", "askuep@esb.khoe.com.ua")
+        # allowed_sender больше не используется для фильтрации поиска
     except Exception:
         return [], "Ошибка: Не заполнен файл .streamlit/secrets.toml"
 
@@ -57,14 +57,9 @@ def fetch_attachments_from_mail(limit=15):
         if status != "OK":
             return [], "Не удалось открыть папку входящие."
 
-        # 2. Поиск писем (Строгий фильтр)
-        # Ищем письма ОТ отправителя И с темой, содержащей "30917"
-        # IMAP Search format: '(FROM "email" SUBJECT "subject")'
-        search_criteria = f'(FROM "{ALLOWED_SENDER}" SUBJECT "30917")'
-        
-        # Если sender не задан, ищем просто по теме
-        if not ALLOWED_SENDER:
-            search_criteria = '(SUBJECT "30917")'
+        # 2. Поиск писем (Широкий фильтр)
+        # Ищем письма, где в теме ЕСТЬ подстрока "30917". Отправитель любой.
+        search_criteria = '(SUBJECT "30917")'
 
         status, messages = mail.search(None, search_criteria)
         
@@ -74,9 +69,9 @@ def fetch_attachments_from_mail(limit=15):
         email_ids = messages[0].split()
         
         if not email_ids:
-            return [], f"Писем от {ALLOWED_SENDER} с темой 30917 не найдено."
+            return [], "Писем с темой, содержащей '30917', не найдено."
 
-        # Берем последние письма
+        # Берем последние письма (с конца списка)
         latest_email_ids = email_ids[-limit:] 
         
         for e_id in reversed(latest_email_ids):
@@ -88,8 +83,10 @@ def fetch_attachments_from_mail(limit=15):
                     try:
                         msg = email.message_from_bytes(response_part[1])
                         
-                        # Проверка темы (на всякий случай, хотя IMAP уже отфильтровал)
+                        # Дополнительная проверка темы после декодирования (для надежности)
                         subject = decode_mime_words(msg.get("Subject"))
+                        
+                        # Если вдруг сервер ошибся, проверяем Python-ом
                         if "30917" not in subject:
                             continue
 
@@ -118,7 +115,7 @@ def fetch_attachments_from_mail(limit=15):
         mail.logout()
         
         if not found_files:
-            return [], "Письма найдены, но вложений .txt в них нет."
+            return [], "Письма с '30917' найдены, но вложений .txt в них нет."
             
         return found_files, None
 
