@@ -6,4 +6,7 @@ openpyxl
 fpdf2>=2.7.4
 matplotlib
 scipy
-google-generativeai
+google-genai
+kaleido==0.2.1
+tabulate
+python-docx

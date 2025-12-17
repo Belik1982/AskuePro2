@@ -8,6 +8,7 @@ import numpy as np
 
 # Локальні модулі
 import ui
+from ui import t
 import parser
 import graph_utils
 import export_utils
@@ -22,11 +23,13 @@ st.set_page_config(page_title="АСКОЕ Pro", layout="wide", page_icon="⚡", 
 if "data_df" not in st.session_state: st.session_state["data_df"] = pd.DataFrame()
 if "file_info" not in st.session_state: st.session_state["file_info"] = []
 if "messages" not in st.session_state: st.session_state["messages"] = []
+if "lang" not in st.session_state: st.session_state["lang"] = "ua"
 if "nav_tab" not in st.session_state: st.session_state["nav_tab"] = "tab_graph"
 if "is_chat_open" not in st.session_state: st.session_state["is_chat_open"] = False
 if "palette_name" not in st.session_state: st.session_state["palette_name"] = "Default"
 if "custom_colors" not in st.session_state: st.session_state["custom_colors"] = ["#FF0000"] * 8
 if "pdf_bytes" not in st.session_state: st.session_state["pdf_bytes"] = None
+if "sys_prompt_loaded" not in st.session_state: st.session_state["sys_prompt_loaded"] = False
 
 # Стан майстра звітів
 if "report_blocks" not in st.session_state: 
@@ -50,23 +53,19 @@ def merge_new_data(new_df, new_files):
         st.session_state["data_df"] = new_df
         st.session_state["file_info"] = new_files
     else:
-        # Запобігаємо конфліктам типів
         old_df = st.session_state["data_df"]
-        
-        # Конкатенація
         combined = pd.concat([old_df, new_df], ignore_index=True)
-        
-        # Видалення дублікатів (залишаємо останні завантажені)
         combined = combined.drop_duplicates(subset=["DateTime", "MeterID", "Type"], keep="last")
         combined = combined.sort_values("DateTime")
         
         st.session_state["data_df"] = combined
         
-        # Оновлення списку файлів
         existing_names = {f['name'] for f in st.session_state["file_info"]}
         for f in new_files:
             if f['name'] not in existing_names:
                 st.session_state["file_info"].append(f)
+        
+        st.session_state["sys_prompt_loaded"] = False
 
 def add_report_block(b_type, title, default_meters=None, default_types=None):
     st.session_state["report_counter"] += 1
@@ -93,7 +92,7 @@ else: st.title(f"⚡ АСКОЕ Pro")
 
 df = st.session_state["data_df"]
 
-# --- APP LOGIC: ЗАВАНТАЖЕННЯ (СТАРТОВИЙ ЕКРАН) ---
+# --- APP LOGIC: ЗАВАНТАЖЕННЯ ---
 if df.empty:
     ui.render_sidebar()
     ui.render_start_screen()
@@ -103,9 +102,9 @@ if df.empty:
     with src_tab1:
         up = st.file_uploader("Оберіть .txt (Формат 30917)", type=["txt"], accept_multiple_files=True, label_visibility="collapsed")
         if up:
-            files = [(f.name, f.read()) for f in up]
+            files = [(f.name, f.read(), datetime.now()) for f in up]
             with st.spinner("Обробка файлів..."):
-                d, i, errs = parser.parse_askue_files(files, datetime.now().year)
+                d, i, errs = parser.parse_askue_files(files)
             if errs:
                 st.error("Помилки читання файлів:")
                 for e in errs: st.write(f"- {e}")
@@ -123,7 +122,7 @@ if df.empty:
                 elif not mail_files: st.warning("Вкладень не знайдено.")
                 else:
                     st.success(f"Знайдено файлів: {len(mail_files)}")
-                    d, i, errs = parser.parse_askue_files(mail_files, datetime.now().year)
+                    d, i, errs = parser.parse_askue_files(mail_files)
                     if not d.empty:
                         st.session_state["data_df"] = d
                         st.session_state["file_info"] = i
@@ -132,30 +131,32 @@ if df.empty:
 
 else:
     # --- БОКОВА ПАНЕЛЬ: ДЖЕРЕЛО ---
-    ui.render_sidebar(df_context=df, file_info=st.session_state.get("file_info", []))
+    ui.render_sidebar(df_context=df, file_info=[])
     
     with st.sidebar:
         with st.expander("📂 Джерело даних", expanded=False):
             sb_tab1, sb_tab2 = st.tabs(["Інфо", "Додати"])
             with sb_tab1:
-                st.number_input("Рік", 2000, 2100, 2025, key="year_input")
-                ui.render_file_grid(st.session_state.get("file_info", []))
-                if st.button("🗑️ Очистити все"):
+                # Вхідні дані дати для відображення
+                dr = None
+                if not st.session_state["data_df"].empty:
+                    dr = (st.session_state["data_df"]["Date"].min(), st.session_state["data_df"]["Date"].max())
+                
+                ui.render_file_grid(st.session_state.get("file_info", []), date_range=dr)
+                if st.button("🗑️ Очистити все", key="clear_all_btn"):
                     st.session_state["data_df"] = pd.DataFrame()
                     st.session_state["file_info"] = []
                     st.rerun()
             
             with sb_tab2:
                 st.caption("Додати до поточних даних:")
-                
-                # --- ВИПРАВЛЕННЯ: Використовуємо форму для уникнення циклічних перезавантажень ---
                 with st.form("add_files_form", clear_on_submit=True):
                     add_up = st.file_uploader("Оберіть файли .txt", type=["txt"], accept_multiple_files=True, label_visibility="collapsed")
                     submitted = st.form_submit_button("📥 Завантажити")
                     
                     if submitted and add_up:
-                        files = [(f.name, f.read()) for f in add_up]
-                        d, i, _ = parser.parse_askue_files(files, datetime.now().year)
+                        files = [(f.name, f.read(), datetime.now()) for f in add_up]
+                        d, i, _ = parser.parse_askue_files(files)
                         if not d.empty:
                             merge_new_data(d, i)
                             st.success(f"Додано файлів: {len(files)}")
@@ -163,11 +164,11 @@ else:
                 
                 st.divider()
                 
-                if st.button("📧 Додати з пошти", key="add_mail"):
+                if st.button("📧 Додати з пошти", key="add_mail_btn"):
                     with st.spinner("Завантаження..."):
                         mail_files, err = mail_utils.fetch_attachments_from_mail(limit=10)
                         if mail_files:
-                            d, i, _ = parser.parse_askue_files(mail_files, datetime.now().year)
+                            d, i, _ = parser.parse_askue_files(mail_files)
                             if not d.empty:
                                 merge_new_data(d, i)
                                 st.toast(f"Додано з пошти: {len(mail_files)}")
@@ -177,9 +178,9 @@ else:
 
     # --- НАВІГАЦІЯ ---
     tabs_map = {
-        "tab_graph": "Графіки 30хв", "tab_daily": "Добові",
-        "tab_matrix": "Матриця", "tab_pq": "P vs Q", 
-        "tab_table": "Таблиця", "tab_report": "📄 Майстер Звітів"
+        "tab_graph": t("tab_graph"), "tab_daily": t("tab_daily"),
+        "tab_matrix": t("tab_matrix"), "tab_pq": t("tab_pq"), 
+        "tab_dist": t("tab_dist"), "tab_table": t("tab_table"), "tab_report": t("tab_report")
     }
     nav = st.radio("Nav", list(tabs_map.keys()), format_func=lambda x: tabs_map[x], horizontal=True, label_visibility="collapsed")
     st.session_state["nav_tab"] = nav 
@@ -198,15 +199,24 @@ else:
             def clear_all_meters(all_m):
                 for m in all_m: st.session_state[f"chk_m_{m}"] = False
             
+            def select_cons(cons_list):
+                for item in cons_list: st.session_state[f"chk_{item}"] = True
+            def clear_cons(cons_list):
+                for item in cons_list: st.session_state[f"chk_{item}"] = False
+            def select_gen(gen_list):
+                for item in gen_list: st.session_state[f"chk_{item}"] = True
+            def clear_gen(gen_list):
+                for item in gen_list: st.session_state[f"chk_{item}"] = False
+
             with c1:
                 with st.container(border=True):
-                    h1, h2, h3 = st.columns([4, 1, 1])
+                    h1, h2, h3 = st.columns([6, 2, 3])
                     h1.markdown('<span style="font-size:0.8rem;font-weight:700;color:#0068c9">ЛІЧИЛЬНИКИ</span>', unsafe_allow_html=True)
                     if nav == "tab_matrix":
                         sel_m = [st.radio("Meter", all_m, label_visibility="collapsed")]
                     else:
-                        h2.button("☑️", on_click=select_all_meters, args=(all_m,), key="btn_m_all", help="Всі")
-                        h3.button("⬜", on_click=clear_all_meters, args=(all_m,), key="btn_m_clr", help="Скинути")
+                        h2.button("Всі", on_click=select_all_meters, args=(all_m,), key="btn_m_all")
+                        h3.button("Скид", on_click=clear_all_meters, args=(all_m,), key="btn_m_clr")
                         sel_m = []
                         m_cols = st.columns(3)
                         for idx, m in enumerate(all_m):
@@ -229,13 +239,21 @@ else:
                     else:
                         cc1, cc2 = st.columns(2)
                         with cc1:
-                            st.caption("Споживання")
+                            ch1, ch2, ch3 = st.columns([6, 2, 3])
+                            ch1.caption("Споживання")
+                            ch2.button("Всі", on_click=select_cons, args=(cons_list,), key="btn_c_all")
+                            ch3.button("Скид", on_click=clear_cons, args=(cons_list,), key="btn_c_clr")
                             for item in cons_list:
-                                if st.checkbox(item, value=True, key=f"chk_{item}"): sel_t.append(item)
+                                if f"chk_{item}" not in st.session_state: st.session_state[f"chk_{item}"] = True
+                                if st.checkbox(item, key=f"chk_{item}"): sel_t.append(item)
                         with cc2:
-                            st.caption("Генерація")
+                            gh1, gh2, gh3 = st.columns([6, 2, 3])
+                            gh1.caption("Генерація")
+                            gh2.button("Всі", on_click=select_gen, args=(gen_list,), key="btn_g_all")
+                            gh3.button("Скид", on_click=clear_gen, args=(gen_list,), key="btn_g_clr")
                             for item in gen_list:
-                                if st.checkbox(item, value=False, key=f"chk_{item}"): sel_t.append(item)
+                                if f"chk_{item}" not in st.session_state: st.session_state[f"chk_{item}"] = False
+                                if st.checkbox(item, key=f"chk_{item}"): sel_t.append(item)
             with c3:
                 with st.container(border=True):
                     st.markdown('<span style="font-size:0.8rem;font-weight:700;color:#0068c9">ПЕРІОД</span>', unsafe_allow_html=True)
@@ -327,10 +345,10 @@ else:
         safe_mat_m = [safe_all_meters[0]] if safe_all_meters else []
         safe_mat_t = [safe_def_types[0]] if safe_def_types else []
         
-        c_add1.button("➕ Статистика", on_click=add_report_block, args=("stats", "Зведена таблиця", safe_all_meters, safe_def_types))
-        c_add2.button("➕ Графік 30хв", on_click=add_report_block, args=("graph_30m", "Графік навантаження", safe_all_meters, safe_def_types))
-        c_add3.button("➕ Графік Доба", on_click=add_report_block, args=("graph_daily", "Добовий графік", safe_all_meters, safe_def_types))
-        c_add4.button("➕ Матриця", on_click=add_report_block, args=("graph_matrix", "Теплова карта", safe_mat_m, safe_mat_t))
+        c_add1.button(t("rep_add_stats"), on_click=add_report_block, args=("stats", "Зведена таблиця", safe_all_meters, safe_def_types))
+        c_add2.button(t("rep_add_30m"), on_click=add_report_block, args=("graph_30m", "Графік навантаження", safe_all_meters, safe_def_types))
+        c_add3.button(t("rep_add_daily"), on_click=add_report_block, args=("graph_daily", "Добовий графік", safe_all_meters, safe_def_types))
+        c_add4.button(t("rep_add_matrix"), on_click=add_report_block, args=("graph_matrix", "Теплова карта", safe_mat_m, safe_mat_t))
         
         if c_gen.button("🚀 Сформувати PDF", type="primary"):
             with st.spinner("Генерація звіту..."):
@@ -384,7 +402,7 @@ else:
             cust_colors = st.session_state.get("custom_colors") if current_palette == "Custom" else None
             
             if nav == "tab_graph":
-                st.caption("ℹ️ **Графік профілю потужності (30 хв).**")
+                st.caption(t("desc_30m"))
                 res_val = st.session_state.get("resample_val", "30T")
                 res = res_val.replace("H", "h") if "H" in res_val else res_val
                 anom = st.session_state["show_anom"]
@@ -410,26 +428,34 @@ else:
                     if stats: st.markdown(ui.generate_detailed_stats_html(stats, tr), unsafe_allow_html=True)
 
             elif nav == "tab_daily": 
-                st.caption("ℹ️ **Добове споживання.**")
+                st.caption(t("desc_daily"))
                 show_v = st.session_state.get("show_vals", False)
                 fig = graph_utils.plot_daily_bar(df_v, h, l_pos, common_labels, pl_template, palette_name=current_palette, custom_colors=cust_colors, show_vals=show_v)
                 st.plotly_chart(fig, use_container_width=True)
 
             elif nav == "tab_matrix": 
-                st.caption("ℹ️ **Теплова карта.**")
+                st.caption(t("desc_matrix"))
                 matrix_palette = st.session_state.get("heatmap_palette_name", "Default")
                 fig = graph_utils.plot_heatmap(df_v, h, st.session_state.get("show_vals", False), common_labels, pl_template, palette_name=matrix_palette)
                 st.plotly_chart(fig, use_container_width=True)
 
             elif nav == "tab_pq": 
-                st.caption("ℹ️ **P vs Q.**")
+                st.caption(t("desc_pq"))
                 pq_lbl = {"p": "P (Активна)", "q": "Q (Реактивна)", "bw": bw}
                 show_lbls = st.session_state.get("show_pq_labels", False)
                 fig = graph_utils.plot_pq_scatter(df_v, h, True, l_pos, bw, pq_lbl, pl_template, palette_name=current_palette, custom_colors=cust_colors, show_labels=show_lbls)
                 st.plotly_chart(fig, use_container_width=True)
             
+            # --- НОВА ВКЛАДКА "РОЗПОДІЛ" ---
+            elif nav == "tab_dist":
+                st.caption(t("desc_dist"))
+                dist_mode = st.radio("Групування:", ["По годинах доби (0-23)", "По днях тижня (Пн-Нд)"], horizontal=True)
+                group_key = 'Hour' if "годинах" in dist_mode else 'DayOfWeek'
+                fig = graph_utils.plot_violin_distribution(df_v, h, group_key, pl_template, palette_name=current_palette, custom_colors=cust_colors, labels=common_labels)
+                st.plotly_chart(fig, use_container_width=True)
+            
             elif nav == "tab_table":
-                st.caption("ℹ️ **Таблиця даних.**")
+                st.caption(t("desc_table"))
                 c_mode, _ = st.columns([1, 3])
                 table_mode = c_mode.radio("Формат даних:", ["Список (Raw)", "Зведена (Pivot)"], horizontal=True)
                 
@@ -465,17 +491,48 @@ else:
             with st.expander("Налаштування ШІ"):
                 api_key = st.secrets.get("GOOGLE_API_KEY")
                 if not api_key: st.error("Введіть API ключ")
-                st.session_state["model_name"] = st.selectbox("Model", ["gemini-1.5-flash", "gemini-1.5-pro"])
-            messages_container = st.container(height=300)
-            for msg in st.session_state.get("messages", []):
+                
+                models_list = [
+                    "gemini-2.5-flash-lite",
+                    "gemini-2.5-flash",
+                    "gemini-2.0-flash"
+                ]
+                st.session_state["model_name"] = st.selectbox("Model", models_list)
+                
+                if st.button("🔄 Оновити дані для ШІ"):
+                    sys_prompt = ai_utils.prepare_ai_context(df_v if not df_v.empty else df, st.session_state.get("file_info", []))
+                    st.session_state["messages"] = [{"role": "user", "content": sys_prompt}]
+                    st.session_state["messages"].append({"role": "model", "content": "Дані оновлено. Готовий до аналізу."})
+                    st.session_state["sys_prompt_loaded"] = True
+                    st.rerun()
+            
+            if st.session_state.get("messages"):
+                docx = export_utils.export_chat_to_docx(st.session_state["messages"])
+                st.download_button("💾 Зберегти діалог (.docx)", docx, "chat_history.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+            if "chat_height" not in st.session_state: st.session_state["chat_height"] = 400
+            st.session_state["chat_height"] = st.slider("Висота чату", 300, 800, 400)
+            messages_container = st.container(height=st.session_state["chat_height"])
+            
+            if not st.session_state.get("sys_prompt_loaded") and not df.empty:
+                sys_prompt = ai_utils.prepare_ai_context(df, st.session_state.get("file_info", []))
+                st.session_state["messages"] = [{"role": "user", "content": sys_prompt}]
+                st.session_state["messages"].append({"role": "model", "content": "Дані завантажено. Я готовий відповідати."})
+                st.session_state["sys_prompt_loaded"] = True
+
+            visible_msgs = st.session_state.get("messages", [])[1:]
+            for msg in visible_msgs:
                 messages_container.chat_message(msg["role"]).write(msg["content"])
+            
             if prompt := st.chat_input("Ваше питання..."):
                 if not api_key: st.error("Введіть API ключ")
                 else:
                     st.session_state["messages"].append({"role": "user", "content": prompt})
+                    messages_container.chat_message("user").write(prompt)
+                    
                     with st.spinner("Аналізую..."):
                         from ai_utils import ai_generate_reply
                         history = st.session_state.get("messages", [])
                         response = ai_generate_reply(api_key, st.session_state["model_name"], history)
-                        st.session_state["messages"].append({"role": "assistant", "content": response})
+                        st.session_state["messages"].append({"role": "model", "content": response})
                         st.rerun()

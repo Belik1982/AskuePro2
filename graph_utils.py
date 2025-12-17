@@ -93,26 +93,18 @@ def plot_30min_graph(df, height, line_width, show_pts, show_anomalies, chart_typ
                 fig.add_trace(go.Scatter(x=anom["DateTime"], y=anom["Value"], mode="markers", marker=dict(color=ac, size=10, symbol="x"), name=f"{name} (Alert)", showlegend=False))
 
     axis = get_axis_style(bw_mode)
-    
-    # Настройки оси X (сетка + плотность)
     x_ax = axis.copy()
     x_ax.update(dict(
         title=labels.get("x", ""),
-        tickformatstops=[
-            dict(dtickrange=[None, 86400000], value="%H:%M\n%d.%m"),
-            dict(dtickrange=[86400000, None], value="%d.%m")
-        ],
+        tickformatstops=[dict(dtickrange=[None, 86400000], value="%H:%M\n%d.%m"), dict(dtickrange=[86400000, None], value="%d.%m")],
         rangeslider=dict(visible=True, thickness=0.08),
-        showgrid=True,
-        gridcolor="rgba(128,128,128,0.2)",
-        nticks=30, 
+        showgrid=True, gridcolor="rgba(128,128,128,0.2)", nticks=30,
     ))
 
     fig.update_layout(
         height=height, template=template, hovermode="x unified", dragmode="select",
         margin=dict(t=30, b=20, l=40, r=40),
-        xaxis=x_ax,
-        yaxis=dict(**axis, title=labels.get("y", ""))
+        xaxis=x_ax, yaxis=dict(**axis, title=labels.get("y", ""))
     )
     configure_legend(fig, legend_pos)
     return fig
@@ -137,29 +129,12 @@ def plot_daily_bar(df, height, l_pos, labels, template, palette_name="Default", 
         text_pos = "auto" if show_vals else None
 
         ht = "<b>%{y:,.2f}</b><br>%{x|%d.%m.%Y}<extra>" + f"{meter} {typ}" + "</extra>"
-        
-        fig.add_trace(go.Bar(
-            x=sub["Date"], y=sub["Value"], name=f"{meter} {typ}", marker=ms, hovertemplate=ht,
-            texttemplate=text_template, textposition=text_pos
-        ))
+        fig.add_trace(go.Bar(x=sub["Date"], y=sub["Value"], name=f"{meter} {typ}", marker=ms, hovertemplate=ht, texttemplate=text_template, textposition=text_pos))
 
     axis_x = get_axis_style(bw_mode).copy()
-    axis_x.update(dict(
-        title=labels.get("x", ""), 
-        tickformat="%d.%m",
-        tickmode="linear", 
-        dtick=86400000.0,
-        showgrid=True,
-        gridcolor="rgba(128,128,128,0.2)",
-        gridwidth=1
-    ))
+    axis_x.update(dict(title=labels.get("x", ""), tickformat="%d.%m", tickmode="linear", dtick=86400000.0, showgrid=True, gridcolor="rgba(128,128,128,0.2)", gridwidth=1))
 
-    fig.update_layout(
-        height=height, template=template, barmode="group",
-        margin=dict(t=30, b=20, l=40, r=40),
-        xaxis=axis_x, 
-        yaxis=dict(**get_axis_style(bw_mode), title=labels.get("y", ""))
-    )
+    fig.update_layout(height=height, template=template, barmode="group", margin=dict(t=30, b=20, l=40, r=40), xaxis=axis_x, yaxis=dict(**get_axis_style(bw_mode), title=labels.get("y", "")))
     configure_legend(fig, l_pos)
     return fig
 
@@ -167,26 +142,14 @@ def plot_heatmap(df, height, show_text, labels, template, palette_name="Default"
     if df.empty: return go.Figure()
     m, t = df.iloc[0]["MeterID"], df.iloc[0]["Type"]
     sub = df[(df["MeterID"] == m) & (df["Type"] == t)].copy()
-    
     sub["TimeStr"] = sub["Time"].apply(lambda x: x.strftime("%H:%M"))
-    
-    # 1. Сначала пивот по реальной дате (чтобы сортировка была правильной)
-    # Используем Date (datetime.date) как есть
     piv = sub.pivot_table(index="TimeStr", columns="Date", values="Value", aggfunc="sum")
-    
-    # 2. Сортуємо строки (Час)
     piv.index = pd.to_datetime(piv.index, format="%H:%M").time
-    piv = piv.sort_index()
-    piv.index = [tm.strftime("%H:%M") for tm in piv.index]
-    
-    # 3. Перейменовуємо стовпчики (Дати) ВЖЕ ПІСЛЯ того як вони відсортувалися автоматично
-    # Це вирішує проблему 1.11 -> 1.12
+    piv = piv.sort_index(); piv.index = [tm.strftime("%H:%M") for tm in piv.index]
     new_cols = [d.strftime("%d.%m") for d in piv.columns]
     piv.columns = new_cols
-    
     scale = PALETTE_TO_HEATMAP.get(palette_name, "RdYlGn_r")
     txt = ".1f" if show_text else False
-    
     fig = px.imshow(piv, aspect="auto", color_continuous_scale=scale, text_auto=txt)
     fig.update_layout(height=height, title=f"{m} {t}", template=template, margin=dict(t=40, b=20, l=40, r=40))
     return fig
@@ -196,41 +159,60 @@ def plot_pq_scatter(df, height, show_cos, l_pos, bw_mode, labels, template, pale
     if df_c.empty: return go.Figure()
     piv = df_c.pivot_table(index=["DateTime", "MeterID"], columns="Suffix", values="Value").reset_index()
     if 2 not in piv.columns or 4 not in piv.columns: return go.Figure()
-    
     piv["TimeStr"] = piv["DateTime"].dt.strftime("%d.%m %H:%M")
-    
     fig = go.Figure()
     meters = sorted(piv["MeterID"].unique())
-    
     for i, m in enumerate(meters):
         d = piv[piv["MeterID"] == m]
         if bw_mode: c = "black"; sym = get_style_settings(i, True, palette_name)[2]
         else: c = get_color(i, palette_name, False, custom_colors); sym = "circle"
-        
-        mode = "markers"
-        text_arr = None
-        if show_labels:
-            mode = "markers+text"
-            text_arr = d["DateTime"].dt.strftime("%H:%M")
-            
-        fig.add_trace(go.Scatter(
-            x=d[2], y=d[4], mode=mode, name=str(m), 
-            marker=dict(symbol=sym, size=8, opacity=0.7, color=c),
-            customdata=d["TimeStr"],
-            text=text_arr, textposition="top center",
-            hovertemplate="<b>%{customdata}</b><br>P: %{x:,.1f}<br>Q: %{y:,.1f}<extra></extra>"
-        ))
-    
+        mode = "markers"; text_arr = None
+        if show_labels: mode = "markers+text"; text_arr = d["DateTime"].dt.strftime("%H:%M")
+        fig.add_trace(go.Scatter(x=d[2], y=d[4], mode=mode, name=str(m), marker=dict(symbol=sym, size=8, opacity=0.7, color=c), customdata=d["TimeStr"], text=text_arr, textposition="top center", hovertemplate="<b>%{customdata}</b><br>P: %{x:,.1f}<br>Q: %{y:,.1f}<extra></extra>"))
     axis = get_axis_style(bw_mode)
-    fig.update_layout(
-        xaxis=dict(**axis, title=labels.get("p", "P")), 
-        yaxis=dict(**axis, title=labels.get("q", "Q")), 
-        height=height, template=template,
-        margin=dict(t=30, b=20, l=40, r=40)
-    )
+    fig.update_layout(xaxis=dict(**axis, title=labels.get("p", "P")), yaxis=dict(**axis, title=labels.get("q", "Q")), height=height, template=template, margin=dict(t=30, b=20, l=40, r=40))
     if show_cos:
         mx = piv[2].max() if not piv.empty else 100
         slope = math.tan(math.acos(0.96))
         fig.add_trace(go.Scatter(x=[0, mx], y=[0, mx*slope], mode="lines", line=dict(color="black" if bw_mode else "green", dash="dash"), name="Cos φ 0.96"))
     configure_legend(fig, l_pos)
+    return fig
+
+# --- НОВА ФУНКЦІЯ (СКРИПКОВИЙ ГРАФІК) ---
+def plot_violin_distribution(df, height, group_by, template, palette_name="Default", custom_colors=None, labels=None):
+    if df.empty: return go.Figure()
+    df = df.copy()
+    
+    if group_by == 'Hour':
+        df['X_Axis'] = df['DateTime'].dt.hour
+        x_label = "Година доби"
+        category_orders = {'X_Axis': list(range(24))}
+    else: 
+        days_map = {0: '01. Пн', 1: '02. Вт', 2: '03. Ср', 3: '04. Чт', 4: '05. Пт', 5: '06. Сб', 6: '07. Нд'}
+        df['X_Axis'] = df['DateTime'].dt.dayofweek.map(days_map)
+        x_label = "День тижня"
+        category_orders = {'X_Axis': sorted(list(days_map.values()))}
+
+    if palette_name == "Custom" and custom_colors:
+        scale = custom_colors
+    else:
+        scale = PALETTES.get(palette_name, PALETTES["Default"])
+
+    y_title = labels.get("y", "Значення") if labels else "Значення"
+
+    fig = px.violin(
+        df, x='X_Axis', y='Value', color='Type', box=True, points=False,
+        hover_data=['DateTime'], color_discrete_sequence=scale, category_orders=category_orders
+    )
+    
+    # --- ВИПРАВЛЕННЯ: Додано spanmode='hard' для обрізки "хвостів" ---
+    fig.update_traces(spanmode='hard')
+
+    fig.update_layout(
+        height=height, template=template, 
+        xaxis_title=x_label, yaxis_title=y_title, 
+        violinmode='group', 
+        margin=dict(t=30, b=20, l=40, r=40), 
+        legend=dict(orientation="h", y=1.1, x=0)
+    )
     return fig

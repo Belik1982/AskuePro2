@@ -6,6 +6,8 @@ import io
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
+from docx import Document # Новая библиотека
+from docx.shared import Pt, RGBColor
 
 FONT_NAME = "DejaVuSans.ttf"
 
@@ -125,7 +127,6 @@ def render_mpl_matrix(df, title):
             step = max(1, len(days) // 15)
             ax.set_xticks(np.arange(0, len(days), step))
             ax.set_xticklabels([d.strftime('%d.%m') for d in days[::step]], rotation=45, fontsize=8)
-        
         if len(days) <= 35:
             rows, cols = piv.shape
             for i in range(rows):
@@ -133,7 +134,6 @@ def render_mpl_matrix(df, title):
                     val = piv.iloc[i, j]
                     if not np.isnan(val) and val > 0:
                         ax.text(j, i, f"{val:.0f}", ha="center", va="center", color="white", fontsize=5)
-
         plt.tight_layout()
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         plt.savefig(tmp.name, dpi=120)
@@ -146,7 +146,6 @@ def export_custom_pdf(df_full, file_info, config) -> bytes:
     pdf.add_page()
     d_start, d_end = config['dates']
     df_period = df_full[(df_full['Date'] >= d_start) & (df_full['Date'] <= d_end)].copy()
-    
     font = 'DejaVu' if pdf.font_loaded else 'Arial'
     pdf.set_font(font, '', 9)
     pdf.cell(0, 5, pdf._txt(f"Период отчета: {d_start} - {d_end}"), ln=True)
@@ -182,7 +181,6 @@ def export_custom_pdf(df_full, file_info, config) -> bytes:
             img_path = render_mpl_daily(df_block, title)
         elif b_type == 'graph_matrix':
             img_path = render_mpl_matrix(df_block, title)
-            
         if img_path:
             pdf.add_image_from_file(img_path)
             try: os.unlink(img_path)
@@ -190,13 +188,38 @@ def export_custom_pdf(df_full, file_info, config) -> bytes:
             
     return bytes(pdf.output(dest='S'))
 
-# --- EXCEL EXPORT (UPDATED) ---
 def export_excel_bytes(df: pd.DataFrame, include_index=False) -> bytes:
-    """
-    Экспорт в Excel. 
-    include_index=True нужен для сводных таблиц (Pivot), где дата в индексе.
-    """
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=include_index, sheet_name="Data")
+    return buf.getvalue()
+
+# --- EXPORT CHAT TO DOCX ---
+def export_chat_to_docx(messages):
+    """Экспорт истории чата в Word"""
+    doc = Document()
+    doc.add_heading('Історія чату з ШІ-асистентом', 0)
+    
+    # Пропускаем первое сообщение (системный промпт)
+    visible_msgs = messages[1:] if len(messages) > 0 else []
+    
+    for msg in visible_msgs:
+        role_name = "ВИ" if msg["role"] == "user" else "ШІ (АСИСТЕНТ)"
+        
+        # Заголовок сообщения
+        p = doc.add_paragraph()
+        run = p.add_run(f"{role_name}:")
+        run.bold = True
+        run.font.size = Pt(11)
+        if msg["role"] == "model" or msg["role"] == "assistant":
+            run.font.color.rgb = RGBColor(0, 100, 0) # Зеленый для ИИ
+        else:
+            run.font.color.rgb = RGBColor(0, 0, 150) # Синий для юзера
+            
+        # Текст сообщения
+        doc.add_paragraph(msg["content"])
+        doc.add_paragraph("-" * 30) # Разделитель
+
+    buf = io.BytesIO()
+    doc.save(buf)
     return buf.getvalue()
