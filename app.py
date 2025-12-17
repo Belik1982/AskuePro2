@@ -3,10 +3,11 @@ import pandas as pd
 import os
 import math
 import base64
+import io
 from datetime import datetime
 import numpy as np
 
-# Локальні модулі
+# Local Modules
 import ui
 from ui import t
 import parser
@@ -31,7 +32,7 @@ if "custom_colors" not in st.session_state: st.session_state["custom_colors"] = 
 if "pdf_bytes" not in st.session_state: st.session_state["pdf_bytes"] = None
 if "sys_prompt_loaded" not in st.session_state: st.session_state["sys_prompt_loaded"] = False
 
-# Стан майстра звітів
+# Report State
 if "report_blocks" not in st.session_state: 
     st.session_state["report_blocks"] = [{"type": "stats", "id": 0, "title": "Зведена статистика"}]
 if "report_counter" not in st.session_state: st.session_state["report_counter"] = 1
@@ -46,6 +47,7 @@ for k, v in defaults.items():
 
 # --- ФУНКЦІЇ ---
 def merge_new_data(new_df, new_files):
+    """Об'єднує нові дані з існуючими"""
     if new_df.empty: return
     if st.session_state["data_df"].empty:
         st.session_state["data_df"] = new_df
@@ -97,7 +99,7 @@ if df.empty:
     with src_tab1:
         up = st.file_uploader("Оберіть .txt (Формат 30917)", type=["txt"], accept_multiple_files=True, label_visibility="collapsed")
         if up:
-            files = [(f.name, f.read(), datetime.now()) for f in up]
+            files = [(f.name, f.read()) for f in up]
             with st.spinner("Обробка файлів..."):
                 d, i, errs = parser.parse_askue_files(files)
             if errs:
@@ -165,35 +167,87 @@ else:
                         elif err: st.error(err)
                         else: st.toast("Нових файлів не знайдено.")
 
-        # --- КНОПКА ЧАТУ В САЙДБАРІ (ТІЛЬКИ КНОПКА) ---
+        # --- ЧАТ В САЙДБАРІ ---
         st.markdown("---")
-        st.markdown("""
-        <style>
-            /* Тільки кнопка залишається плаваючою */
-            button[kind="primary"][title="Відкрити чат"] {
-                position: fixed !important;
-                bottom: 30px !important;
-                right: 30px !important;
-                z-index: 99999 !important;
-                border-radius: 50px !important;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
-                width: auto !important;
-                padding: 10px 20px !important;
-                background-color: #ff4b4b !important;
-                color: white !important;
-                border: none !important;
-            }
-            button[kind="primary"][title="Відкрити чат"]:hover {
-                transform: scale(1.05);
-                box-shadow: 0 6px 16px rgba(0,0,0,0.4) !important;
-            }
-        </style>
-        """, unsafe_allow_html=True)
         
-        # Кнопка перемикає стан
-        if st.button("🤖 ШІ-Аналітик", key="fab_chat_toggle", type="primary", help="Відкрити чат"):
+        # Кнопка перемикання чату
+        if st.button("🤖 " + ("Сховати ШІ" if st.session_state.is_chat_open else "Відкрити ШІ-Аналітик"), type="primary", use_container_width=True):
             st.session_state.is_chat_open = not st.session_state.is_chat_open
             st.rerun()
+            
+        # === ІНСТРУКЦІЯ ШІ (ВІДНОВЛЕНО) ===
+        with st.expander("ℹ️ Як це працює?", expanded=False):
+            st.markdown("""
+            **ШІ-Аналітик** — це розумний асистент, який **автоматично аналізує** всі завантажені вами дані.
+            
+            **Що він вміє:**
+            *   Знаходити пікові навантаження та дати їх виникнення.
+            *   Порівнювати споживання між різними лічильниками.
+            *   Виявляти аномалії (наприклад, високе споживання вночі).
+            *   Рахувати сумарні показники за будь-який період.
+            
+            **Приклади питань:**
+            *   *"Яке максимальне споживання було в листопаді?"*
+            *   *"Порівняй споживання в робочі та вихідні дні."*
+            *   *"Чи є дні з аномально низьким споживанням?"*
+            """)
+
+        if st.session_state.is_chat_open:
+            st.markdown("### Чат з даними")
+            
+            # Налаштування ШІ
+            with st.expander("Налаштування"):
+                api_key = st.secrets.get("GOOGLE_API_KEY")
+                if not api_key: st.error("Введіть API ключ")
+                models_list = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
+                st.session_state["model_name"] = st.selectbox("Model", models_list)
+                
+                # Повзунок висоти
+                if "chat_height" not in st.session_state: st.session_state["chat_height"] = 400
+                st.session_state["chat_height"] = st.slider("Висота вікна (px)", 300, 800, 400)
+
+                if st.button("🔄 Оновити дані контексту"):
+                    sys_prompt = ai_utils.prepare_ai_context(df, st.session_state.get("file_info", []))
+                    st.session_state["messages"] = [{"role": "user", "content": sys_prompt}]
+                    st.session_state["messages"].append({"role": "model", "content": "Дані оновлено. Готовий до аналізу."})
+                    st.session_state["sys_prompt_loaded"] = True
+                    st.rerun()
+                
+                if len(st.session_state.get("messages", [])) > 1:
+                    docx = export_utils.export_chat_to_docx(st.session_state["messages"])
+                    st.download_button("💾 Зберегти діалог", docx, "chat.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+
+            # Онбордінг
+            if not st.session_state.get("messages") or len(st.session_state["messages"]) <= 1:
+                ui.render_ai_onboarding()
+
+            # Контейнер для повідомлень
+            chat_container = st.container(height=st.session_state["chat_height"])
+            
+            # Авто-завантаження
+            if not st.session_state.get("sys_prompt_loaded") and not df.empty:
+                sys_prompt = ai_utils.prepare_ai_context(df, st.session_state.get("file_info", []))
+                st.session_state["messages"] = [{"role": "user", "content": sys_prompt}]
+                st.session_state["sys_prompt_loaded"] = True
+
+            # Вивід повідомлень
+            visible_msgs = st.session_state.get("messages", [])[1:]
+            for msg in visible_msgs:
+                chat_container.chat_message(msg["role"]).write(msg["content"])
+
+            # Ввід (ТІЛЬКИ ТЕКСТ)
+            if prompt := st.chat_input("Ваше питання..."):
+                if not api_key: st.error("Потрібен ключ API")
+                else:
+                    st.session_state["messages"].append({"role": "user", "content": prompt})
+                    chat_container.chat_message("user").write(prompt)
+                    with st.spinner("Аналізую..."):
+                        from ai_utils import ai_generate_reply
+                        history = st.session_state.get("messages", [])
+                        response = ai_generate_reply(api_key, st.session_state["model_name"], history)
+                        st.session_state["messages"].append({"role": "model", "content": response})
+                        st.rerun()
+
 
     # --- НАВІГАЦІЯ ---
     tabs_map = {
@@ -420,7 +474,7 @@ else:
             cust_colors = st.session_state.get("custom_colors") if current_palette == "Custom" else None
             
             if nav == "tab_graph":
-                st.caption("ℹ️ **Графік профілю потужності (30 хв).**")
+                st.markdown(t("desc_30m"), unsafe_allow_html=True)
                 res_val = st.session_state.get("resample_val", "30T")
                 res = res_val.replace("H", "h") if "H" in res_val else res_val
                 anom = st.session_state["show_anom"]
@@ -446,19 +500,19 @@ else:
                     if stats: st.markdown(ui.generate_detailed_stats_html(stats, tr), unsafe_allow_html=True)
 
             elif nav == "tab_daily": 
-                st.caption("ℹ️ **Добове споживання.**")
+                st.markdown(t("desc_daily"), unsafe_allow_html=True)
                 show_v = st.session_state.get("show_vals", False)
                 fig = graph_utils.plot_daily_bar(df_v, h, l_pos, common_labels, pl_template, palette_name=current_palette, custom_colors=cust_colors, show_vals=show_v)
                 st.plotly_chart(fig, use_container_width=True)
 
             elif nav == "tab_matrix": 
-                st.caption("ℹ️ **Теплова карта.**")
+                st.markdown(t("desc_matrix"), unsafe_allow_html=True)
                 matrix_palette = st.session_state.get("heatmap_palette_name", "Default")
                 fig = graph_utils.plot_heatmap(df_v, h, st.session_state.get("show_vals", False), common_labels, pl_template, palette_name=matrix_palette)
                 st.plotly_chart(fig, use_container_width=True)
 
             elif nav == "tab_pq": 
-                st.caption("ℹ️ **P vs Q.**")
+                st.markdown(t("desc_pq"), unsafe_allow_html=True)
                 pq_lbl = {"p": "P (Активна)", "q": "Q (Реактивна)", "bw": bw}
                 show_lbls = st.session_state.get("show_pq_labels", False)
                 fig = graph_utils.plot_pq_scatter(df_v, h, True, l_pos, bw, pq_lbl, pl_template, palette_name=current_palette, custom_colors=cust_colors, show_labels=show_lbls)
@@ -466,14 +520,14 @@ else:
             
             # --- НОВА ВКЛАДКА "РОЗПОДІЛ" ---
             elif nav == "tab_dist":
-                st.caption("ℹ️ **Статистичний розподіл.**")
+                st.markdown(t("desc_dist"), unsafe_allow_html=True)
                 dist_mode = st.radio("Групування:", ["По годинах доби (0-23)", "По днях тижня (Пн-Нд)"], horizontal=True)
                 group_key = 'Hour' if "годинах" in dist_mode else 'DayOfWeek'
                 fig = graph_utils.plot_violin_distribution(df_v, h, group_key, pl_template, palette_name=current_palette, custom_colors=cust_colors, labels=common_labels)
                 st.plotly_chart(fig, use_container_width=True)
             
             elif nav == "tab_table":
-                st.caption("ℹ️ **Таблиця даних.**")
+                st.markdown(t("desc_table"), unsafe_allow_html=True)
                 c_mode, _ = st.columns([1, 3])
                 table_mode = c_mode.radio("Формат даних:", ["Список (Raw)", "Зведена (Pivot)"], horizontal=True)
                 
@@ -494,71 +548,3 @@ else:
                 st.download_button("📥 Завантажити Excel", export_utils.export_excel_bytes(display_df, include_index=include_idx), "data.xlsx")
 
     ui.render_footer()
-    
-    # --- БЛОК ЧАТУ (ВНИЗУ, НЕ ПЛАВАЮЧИЙ) ---
-    if st.session_state.is_chat_open:
-        st.divider()
-        with st.container(border=True):
-            c_head, c_close = st.columns([8, 1])
-            c_head.subheader("🤖 ШІ-Аналітик")
-            if c_close.button("✖", key="close_chat"):
-                st.session_state.is_chat_open = False
-                st.rerun()
-
-            # ОНБОРДІНГ
-            if not st.session_state.get("messages") or len(st.session_state["messages"]) <= 1:
-                ui.render_ai_onboarding()
-
-            with st.expander("Налаштування ШІ"):
-                api_key = st.secrets.get("GOOGLE_API_KEY")
-                if not api_key: st.error("Введіть API ключ")
-                
-                models_list = [
-                    "gemini-2.5-flash-lite",
-                    "gemini-2.5-flash",
-                    "gemini-2.0-flash"
-                ]
-                st.session_state["model_name"] = st.selectbox("Model", models_list)
-                
-                # Повзунок висоти
-                if "chat_height" not in st.session_state: st.session_state["chat_height"] = 400
-                st.session_state["chat_height"] = st.slider("Висота вікна (px)", 300, 800, 400)
-                
-                if st.button("🔄 Оновити дані для ШІ"):
-                    sys_prompt = ai_utils.prepare_ai_context(df_v if not df_v.empty else df, st.session_state.get("file_info", []))
-                    st.session_state["messages"] = [{"role": "user", "content": sys_prompt}]
-                    st.session_state["messages"].append({"role": "model", "content": "Дані оновлено. Готовий до аналізу."})
-                    st.session_state["sys_prompt_loaded"] = True
-                    st.rerun()
-            
-            # Експорт
-            if len(st.session_state.get("messages", [])) > 1:
-                docx = export_utils.export_chat_to_docx(st.session_state["messages"])
-                st.download_button("💾 Зберегти діалог (.docx)", docx, "chat_history.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-            # Історія
-            messages_container = st.container(height=st.session_state["chat_height"])
-            
-            # Авто-завантаження контексту
-            if not st.session_state.get("sys_prompt_loaded") and not df.empty:
-                sys_prompt = ai_utils.prepare_ai_context(df, st.session_state.get("file_info", []))
-                st.session_state["messages"] = [{"role": "user", "content": sys_prompt}]
-                st.session_state["messages"].append({"role": "model", "content": "Дані завантажено. Я готовий відповідати."})
-                st.session_state["sys_prompt_loaded"] = True
-
-            visible_msgs = st.session_state.get("messages", [])[1:]
-            for msg in visible_msgs:
-                messages_container.chat_message(msg["role"]).write(msg["content"])
-            
-            if prompt := st.chat_input("Ваше питання..."):
-                if not api_key: st.error("Введіть API ключ")
-                else:
-                    st.session_state["messages"].append({"role": "user", "content": prompt})
-                    messages_container.chat_message("user").write(prompt)
-                    
-                    with st.spinner("Аналізую..."):
-                        from ai_utils import ai_generate_reply
-                        history = st.session_state.get("messages", [])
-                        response = ai_generate_reply(api_key, st.session_state["model_name"], history)
-                        st.session_state["messages"].append({"role": "model", "content": response})
-                        st.rerun()
