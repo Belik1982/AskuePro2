@@ -46,9 +46,7 @@ for k, v in defaults.items():
 
 # --- ФУНКЦІЇ ---
 def merge_new_data(new_df, new_files):
-    """Об'єднує нові дані з існуючими"""
     if new_df.empty: return
-
     if st.session_state["data_df"].empty:
         st.session_state["data_df"] = new_df
         st.session_state["file_info"] = new_files
@@ -57,14 +55,11 @@ def merge_new_data(new_df, new_files):
         combined = pd.concat([old_df, new_df], ignore_index=True)
         combined = combined.drop_duplicates(subset=["DateTime", "MeterID", "Type"], keep="last")
         combined = combined.sort_values("DateTime")
-        
         st.session_state["data_df"] = combined
-        
         existing_names = {f['name'] for f in st.session_state["file_info"]}
         for f in new_files:
             if f['name'] not in existing_names:
                 st.session_state["file_info"].append(f)
-        
         st.session_state["sys_prompt_loaded"] = False
 
 def add_report_block(b_type, title, default_meters=None, default_types=None):
@@ -137,23 +132,19 @@ else:
         with st.expander("📂 Джерело даних", expanded=False):
             sb_tab1, sb_tab2 = st.tabs(["Інфо", "Додати"])
             with sb_tab1:
-                # Вхідні дані дати для відображення
                 dr = None
                 if not st.session_state["data_df"].empty:
                     dr = (st.session_state["data_df"]["Date"].min(), st.session_state["data_df"]["Date"].max())
-                
                 ui.render_file_grid(st.session_state.get("file_info", []), date_range=dr)
                 if st.button("🗑️ Очистити все", key="clear_all_btn"):
                     st.session_state["data_df"] = pd.DataFrame()
                     st.session_state["file_info"] = []
                     st.rerun()
-            
             with sb_tab2:
                 st.caption("Додати до поточних даних:")
                 with st.form("add_files_form", clear_on_submit=True):
                     add_up = st.file_uploader("Оберіть файли .txt", type=["txt"], accept_multiple_files=True, label_visibility="collapsed")
                     submitted = st.form_submit_button("📥 Завантажити")
-                    
                     if submitted and add_up:
                         files = [(f.name, f.read(), datetime.now()) for f in add_up]
                         d, i, _ = parser.parse_askue_files(files)
@@ -161,9 +152,7 @@ else:
                             merge_new_data(d, i)
                             st.success(f"Додано файлів: {len(files)}")
                             st.rerun()
-                
                 st.divider()
-                
                 if st.button("📧 Додати з пошти", key="add_mail_btn"):
                     with st.spinner("Завантаження..."):
                         mail_files, err = mail_utils.fetch_attachments_from_mail(limit=10)
@@ -175,6 +164,36 @@ else:
                                 st.rerun()
                         elif err: st.error(err)
                         else: st.toast("Нових файлів не знайдено.")
+
+        # --- КНОПКА ЧАТУ В САЙДБАРІ (ТІЛЬКИ КНОПКА) ---
+        st.markdown("---")
+        st.markdown("""
+        <style>
+            /* Тільки кнопка залишається плаваючою */
+            button[kind="primary"][title="Відкрити чат"] {
+                position: fixed !important;
+                bottom: 30px !important;
+                right: 30px !important;
+                z-index: 99999 !important;
+                border-radius: 50px !important;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+                width: auto !important;
+                padding: 10px 20px !important;
+                background-color: #ff4b4b !important;
+                color: white !important;
+                border: none !important;
+            }
+            button[kind="primary"][title="Відкрити чат"]:hover {
+                transform: scale(1.05);
+                box-shadow: 0 6px 16px rgba(0,0,0,0.4) !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Кнопка перемикає стан
+        if st.button("🤖 ШІ-Аналітик", key="fab_chat_toggle", type="primary", help="Відкрити чат"):
+            st.session_state.is_chat_open = not st.session_state.is_chat_open
+            st.rerun()
 
     # --- НАВІГАЦІЯ ---
     tabs_map = {
@@ -265,7 +284,6 @@ else:
     else:
         df_v = df.copy()
 
-    # Розрахунок аномалій
     if not df_v.empty and "is_anomaly" not in df_v.columns:
         grouped = df_v.groupby(["MeterID", "Type"])["Value"]
         df_v["mean"] = grouped.transform("mean")
@@ -402,7 +420,7 @@ else:
             cust_colors = st.session_state.get("custom_colors") if current_palette == "Custom" else None
             
             if nav == "tab_graph":
-                st.caption(t("desc_30m"))
+                st.caption("ℹ️ **Графік профілю потужності (30 хв).**")
                 res_val = st.session_state.get("resample_val", "30T")
                 res = res_val.replace("H", "h") if "H" in res_val else res_val
                 anom = st.session_state["show_anom"]
@@ -428,19 +446,19 @@ else:
                     if stats: st.markdown(ui.generate_detailed_stats_html(stats, tr), unsafe_allow_html=True)
 
             elif nav == "tab_daily": 
-                st.caption(t("desc_daily"))
+                st.caption("ℹ️ **Добове споживання.**")
                 show_v = st.session_state.get("show_vals", False)
                 fig = graph_utils.plot_daily_bar(df_v, h, l_pos, common_labels, pl_template, palette_name=current_palette, custom_colors=cust_colors, show_vals=show_v)
                 st.plotly_chart(fig, use_container_width=True)
 
             elif nav == "tab_matrix": 
-                st.caption(t("desc_matrix"))
+                st.caption("ℹ️ **Теплова карта.**")
                 matrix_palette = st.session_state.get("heatmap_palette_name", "Default")
                 fig = graph_utils.plot_heatmap(df_v, h, st.session_state.get("show_vals", False), common_labels, pl_template, palette_name=matrix_palette)
                 st.plotly_chart(fig, use_container_width=True)
 
             elif nav == "tab_pq": 
-                st.caption(t("desc_pq"))
+                st.caption("ℹ️ **P vs Q.**")
                 pq_lbl = {"p": "P (Активна)", "q": "Q (Реактивна)", "bw": bw}
                 show_lbls = st.session_state.get("show_pq_labels", False)
                 fig = graph_utils.plot_pq_scatter(df_v, h, True, l_pos, bw, pq_lbl, pl_template, palette_name=current_palette, custom_colors=cust_colors, show_labels=show_lbls)
@@ -448,14 +466,14 @@ else:
             
             # --- НОВА ВКЛАДКА "РОЗПОДІЛ" ---
             elif nav == "tab_dist":
-                st.caption(t("desc_dist"))
+                st.caption("ℹ️ **Статистичний розподіл.**")
                 dist_mode = st.radio("Групування:", ["По годинах доби (0-23)", "По днях тижня (Пн-Нд)"], horizontal=True)
                 group_key = 'Hour' if "годинах" in dist_mode else 'DayOfWeek'
                 fig = graph_utils.plot_violin_distribution(df_v, h, group_key, pl_template, palette_name=current_palette, custom_colors=cust_colors, labels=common_labels)
                 st.plotly_chart(fig, use_container_width=True)
             
             elif nav == "tab_table":
-                st.caption(t("desc_table"))
+                st.caption("ℹ️ **Таблиця даних.**")
                 c_mode, _ = st.columns([1, 3])
                 table_mode = c_mode.radio("Формат даних:", ["Список (Raw)", "Зведена (Pivot)"], horizontal=True)
                 
@@ -476,18 +494,21 @@ else:
                 st.download_button("📥 Завантажити Excel", export_utils.export_excel_bytes(display_df, include_index=include_idx), "data.xlsx")
 
     ui.render_footer()
-    ui.render_chat_html_js()
-    fab_container = st.container()
-    with fab_container:
-        st.markdown('<div id="chat-fab-container"></div>', unsafe_allow_html=True)
-        if st.button("💬", key="fab_chat_toggle"):
-            st.session_state.is_chat_open = not st.session_state.is_chat_open
-            st.rerun()
-
+    
+    # --- БЛОК ЧАТУ (ВНИЗУ, НЕ ПЛАВАЮЧИЙ) ---
     if st.session_state.is_chat_open:
-        chat_content_container = st.container()
-        with chat_content_container:
-            st.markdown('<div id="streamlit-chat-content"></div>', unsafe_allow_html=True)
+        st.divider()
+        with st.container(border=True):
+            c_head, c_close = st.columns([8, 1])
+            c_head.subheader("🤖 ШІ-Аналітик")
+            if c_close.button("✖", key="close_chat"):
+                st.session_state.is_chat_open = False
+                st.rerun()
+
+            # ОНБОРДІНГ
+            if not st.session_state.get("messages") or len(st.session_state["messages"]) <= 1:
+                ui.render_ai_onboarding()
+
             with st.expander("Налаштування ШІ"):
                 api_key = st.secrets.get("GOOGLE_API_KEY")
                 if not api_key: st.error("Введіть API ключ")
@@ -499,6 +520,10 @@ else:
                 ]
                 st.session_state["model_name"] = st.selectbox("Model", models_list)
                 
+                # Повзунок висоти
+                if "chat_height" not in st.session_state: st.session_state["chat_height"] = 400
+                st.session_state["chat_height"] = st.slider("Висота вікна (px)", 300, 800, 400)
+                
                 if st.button("🔄 Оновити дані для ШІ"):
                     sys_prompt = ai_utils.prepare_ai_context(df_v if not df_v.empty else df, st.session_state.get("file_info", []))
                     st.session_state["messages"] = [{"role": "user", "content": sys_prompt}]
@@ -506,14 +531,15 @@ else:
                     st.session_state["sys_prompt_loaded"] = True
                     st.rerun()
             
-            if st.session_state.get("messages"):
+            # Експорт
+            if len(st.session_state.get("messages", [])) > 1:
                 docx = export_utils.export_chat_to_docx(st.session_state["messages"])
                 st.download_button("💾 Зберегти діалог (.docx)", docx, "chat_history.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-            if "chat_height" not in st.session_state: st.session_state["chat_height"] = 400
-            st.session_state["chat_height"] = st.slider("Висота чату", 300, 800, 400)
+            # Історія
             messages_container = st.container(height=st.session_state["chat_height"])
             
+            # Авто-завантаження контексту
             if not st.session_state.get("sys_prompt_loaded") and not df.empty:
                 sys_prompt = ai_utils.prepare_ai_context(df, st.session_state.get("file_info", []))
                 st.session_state["messages"] = [{"role": "user", "content": sys_prompt}]
