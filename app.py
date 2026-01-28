@@ -114,7 +114,7 @@ if df.empty:
         st.info("Автоматичний пошук вкладень (тема 30917).")
         if st.button("🔄 Перевірити пошту", type="primary"):
             with st.spinner("Підключення до серверу..."):
-                mail_files, error_msg = mail_utils.fetch_attachments_from_mail(limit=90)
+                mail_files, error_msg = mail_utils.fetch_attachments_from_mail(limit=120)
                 if error_msg: st.error(error_msg)
                 elif not mail_files: st.warning("Вкладень не знайдено.")
                 else:
